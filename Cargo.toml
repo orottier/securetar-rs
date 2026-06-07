@@ -10,6 +10,7 @@ repository = "https://github.com/orottier/securetar-rs"
 documentation = "https://docs.rs/securetar"
 keywords = ["securetar", "tar", "backup", "encryption", "home-assistant"]
 categories = ["cryptography", "encoding"]
+exclude = ["tests/fixtures/*"]
 
 [lib]
 name = "securetar"
