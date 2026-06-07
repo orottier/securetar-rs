@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! SecureTar v3 reader primitives.
 //!
 //! This crate is an independent Rust implementation aligned with the Python
@@ -7,6 +9,19 @@
 //!
 //! Legacy SecureTar v1/v2 AES-CBC and archive-writing helpers are intentionally
 //! not implemented yet.
+//!
+//! ```rust,no_run
+//! use std::{fs::File, io::Read};
+//! use securetar::{SecureTarDecryptStream, SecureTarRootKeyContext};
+//!
+//! let file = File::open("encrypted.securetar")?;
+//! let context = SecureTarRootKeyContext::new("password");
+//! let mut stream = SecureTarDecryptStream::new(file, context)?;
+//!
+//! let mut plaintext_tar = Vec::new();
+//! stream.read_to_end(&mut plaintext_tar)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use std::io::{Cursor, Read};
 
@@ -14,89 +29,131 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use sodiumoxide::crypto::secretstream::xchacha20poly1305 as secretstream;
 use thiserror::Error;
 
+/// AES block size used by legacy SecureTar v1/v2.
 pub const AES_BLOCK_SIZE: usize = 16;
+/// AES IV size used by legacy SecureTar v1/v2.
 pub const AES_IV_SIZE: usize = AES_BLOCK_SIZE;
 
+/// Secretstream authentication bytes per v3 chunk.
 pub const V3_SECRETSTREAM_ABYTES: usize = 17;
+/// Plaintext bytes per v3 secretstream chunk.
 pub const V3_SECRETSTREAM_CHUNK_SIZE: u64 = 1024 * 1024;
+/// Argon2id operation limit for v3 keys.
 pub const V3_KDF_OPSLIMIT: u32 = 8;
+/// Argon2id memory limit, in bytes, for v3 keys.
 pub const V3_KDF_MEMLIMIT: u32 = 16 * 1024 * 1024;
+/// Size of v3 derived keys.
 pub const V3_DERIVED_KEY_SIZE: usize = 32;
+/// Size of v3 BLAKE2b salts.
 pub const V3_DERIVED_KEY_SALT_SIZE: usize = 16;
+/// Size of the XChaCha20-Poly1305 secretstream header.
 pub const V3_CHACHA20_HEADER_SIZE: usize = 24;
 
+/// Default Python securetar buffer size.
 pub const DEFAULT_BUFSIZE: usize = 10240;
 
+/// SecureTar magic bytes.
 pub const SECURETAR_MAGIC: &[u8] = b"SecureTar";
+/// Required reserved bytes in the SecureTar file id.
 pub const SECURETAR_MAGIC_RESERVED: [u8; 6] = [0; 6];
 
+/// Header size for legacy magic-less SecureTar v1.
 pub const SECURETAR_LEGACY_HEADER_SIZE: usize = AES_IV_SIZE;
+/// Size of the SecureTar file id section.
 pub const SECURETAR_FILE_ID_SIZE: usize = 16;
+/// Size of the SecureTar metadata section.
 pub const SECURETAR_FILE_METADATA_SIZE: usize = 16;
+/// Size of the v2 cipher initialization section.
 pub const SECURETAR_V2_CIPHER_INIT_SIZE: usize = AES_IV_SIZE;
+/// Size of a v2 header.
 pub const SECURETAR_V2_HEADER_SIZE: usize =
     SECURETAR_FILE_ID_SIZE + SECURETAR_FILE_METADATA_SIZE + SECURETAR_V2_CIPHER_INIT_SIZE;
+/// Size of the v3 cipher initialization section.
 pub const SECURETAR_V3_CIPHER_INIT_SIZE: usize = 104;
+/// Size of a v3 header.
 pub const SECURETAR_V3_HEADER_SIZE: usize =
     SECURETAR_FILE_ID_SIZE + SECURETAR_FILE_METADATA_SIZE + SECURETAR_V3_CIPHER_INIT_SIZE;
 
+/// Gzip magic bytes used by Python validation.
 pub const GZIP_MAGIC_BYTES: &[u8] = b"\x1f\x8b\x08";
+/// Tar magic bytes used by Python validation.
 pub const TAR_MAGIC_BYTES: &[u8] = b"ustar";
+/// Tar magic offset used by Python validation.
 pub const TAR_MAGIC_OFFSET: usize = 257;
+/// Tar block size.
 pub const TAR_BLOCK_SIZE: usize = 512;
 
+/// Default SecureTar version for new encrypted data in Python.
 pub const DEFAULT_CIPHER_VERSION: u8 = 3;
 
 const V3_VERSION: u8 = 3;
 const V3_PERSONALIZATION: &[u8; 11] = b"SecureTarv3";
 
+/// SecureTar errors.
 #[derive(Debug, Error)]
 pub enum SecureTarError {
+    /// The stream version is not implemented by this crate.
     #[error("Unsupported SecureTar version: {0}")]
     UnsupportedVersion(u8),
 
+    /// Reserved header bytes were not zero.
     #[error("Invalid reserved bytes in SecureTar header")]
     InvalidReservedBytes,
 
+    /// A v3 operation needed a plaintext size.
     #[error("Plaintext size is required")]
     MissingPlaintextSize,
 
+    /// Header bytes were malformed.
     #[error("Invalid SecureTar header")]
     InvalidHeader,
 
+    /// Password validation failed.
     #[error("Invalid password")]
     InvalidPassword,
 
+    /// A final secretstream tag arrived before expected ciphertext end.
     #[error("Unexpected final tag in secretstream decryption")]
     UnexpectedFinalTag,
 
+    /// Ciphertext ended without a final secretstream tag.
     #[error("Missing final tag in secretstream decryption")]
     MissingFinalTag,
 
+    /// Ciphertext was shorter than required.
     #[error("Ciphertext is too short")]
     CiphertextTooShort,
 
+    /// Secretstream decryption failed.
     #[error("Unexpected failure")]
     SecretStreamFailure,
 
+    /// Sodium initialization failed.
     #[error("failed to initialize sodiumoxide")]
     SodiumInit,
 
+    /// Argon2id key derivation failed.
     #[error("failed to derive SecureTar v3 root key: {0}")]
     KeyDerivation(String),
 
+    /// I/O failed.
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
 
+/// Crate result type.
 pub type Result<T> = std::result::Result<T, SecureTarError>;
 
+/// Cipher direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CipherMode {
+    /// Encrypt mode.
     Encrypt,
+    /// Decrypt mode.
     Decrypt,
 }
 
+/// Parsed SecureTar header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecureTarHeader {
     cipher_initialization: Vec<u8>,
@@ -105,6 +162,14 @@ pub struct SecureTarHeader {
 }
 
 impl SecureTarHeader {
+    /// Builds a v3 header from raw cipher initialization bytes.
+    ///
+    /// ```
+    /// # use securetar::{SecureTarHeader, SECURETAR_V3_CIPHER_INIT_SIZE};
+    /// let header = SecureTarHeader::new(vec![0; SECURETAR_V3_CIPHER_INIT_SIZE], Some(0), 3)?;
+    /// assert_eq!(header.version(), 3);
+    /// # Ok::<(), securetar::SecureTarError>(())
+    /// ```
     pub fn new(
         cipher_initialization: impl Into<Vec<u8>>,
         plaintext_size: Option<u64>,
@@ -121,12 +186,32 @@ impl SecureTarHeader {
         }
     }
 
+    /// Reads a header from the front of a stream.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::SecureTarHeader;
+    /// let mut file = File::open("encrypted.securetar")?;
+    /// let header = SecureTarHeader::from_reader(&mut file)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn from_reader(reader: &mut impl Read) -> Result<Self> {
         let mut file_id = [0; SECURETAR_FILE_ID_SIZE];
         reader.read_exact(&mut file_id)?;
         Self::from_file_id_and_reader(file_id, reader)
     }
 
+    /// Reads a header after the caller already consumed a prefix.
+    ///
+    /// ```rust,no_run
+    /// # use std::{fs::File, io::Read};
+    /// # use securetar::{SecureTarHeader, SECURETAR_MAGIC};
+    /// let mut file = File::open("encrypted.securetar")?;
+    /// let mut prefix = [0; SECURETAR_MAGIC.len()];
+    /// file.read_exact(&mut prefix)?;
+    /// let header = SecureTarHeader::from_prefix_and_reader(&prefix, &mut file)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn from_prefix_and_reader(prefix: &[u8], reader: &mut impl Read) -> Result<Self> {
         if prefix.len() > SECURETAR_FILE_ID_SIZE {
             return Err(SecureTarError::InvalidHeader);
@@ -173,6 +258,14 @@ impl SecureTarHeader {
         })
     }
 
+    /// Serializes this header.
+    ///
+    /// ```
+    /// # use securetar::{SecureTarHeader, SECURETAR_V3_CIPHER_INIT_SIZE, SECURETAR_V3_HEADER_SIZE};
+    /// let header = SecureTarHeader::new(vec![0; SECURETAR_V3_CIPHER_INIT_SIZE], Some(0), 3)?;
+    /// assert_eq!(header.to_bytes()?.len(), SECURETAR_V3_HEADER_SIZE);
+    /// # Ok::<(), securetar::SecureTarError>(())
+    /// ```
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let plaintext_size = self
             .plaintext_size
@@ -194,35 +287,84 @@ impl SecureTarHeader {
         Ok(bytes)
     }
 
+    /// Returns raw cipher initialization bytes.
+    ///
+    /// ```
+    /// # use securetar::{SecureTarHeader, SECURETAR_V3_CIPHER_INIT_SIZE};
+    /// let header = SecureTarHeader::new(vec![0; SECURETAR_V3_CIPHER_INIT_SIZE], Some(0), 3)?;
+    /// assert_eq!(header.cipher_initialization().len(), SECURETAR_V3_CIPHER_INIT_SIZE);
+    /// # Ok::<(), securetar::SecureTarError>(())
+    /// ```
     pub fn cipher_initialization(&self) -> &[u8] {
         &self.cipher_initialization
     }
 
+    /// Returns plaintext size from the header.
+    ///
+    /// ```
+    /// # use securetar::{SecureTarHeader, SECURETAR_V3_CIPHER_INIT_SIZE};
+    /// let header = SecureTarHeader::new(vec![0; SECURETAR_V3_CIPHER_INIT_SIZE], Some(42), 3)?;
+    /// assert_eq!(header.plaintext_size(), Some(42));
+    /// # Ok::<(), securetar::SecureTarError>(())
+    /// ```
     pub fn plaintext_size(&self) -> Option<u64> {
         self.plaintext_size
     }
 
+    /// Returns the SecureTar version.
+    ///
+    /// ```
+    /// # use securetar::{SecureTarHeader, SECURETAR_V3_CIPHER_INIT_SIZE};
+    /// let header = SecureTarHeader::new(vec![0; SECURETAR_V3_CIPHER_INIT_SIZE], Some(0), 3)?;
+    /// assert_eq!(header.version(), 3);
+    /// # Ok::<(), securetar::SecureTarError>(())
+    /// ```
     pub fn version(&self) -> u8 {
         self.version
     }
 
+    /// Returns header size in bytes.
+    ///
+    /// ```
+    /// # use securetar::{SecureTarHeader, SECURETAR_V3_CIPHER_INIT_SIZE, SECURETAR_V3_HEADER_SIZE};
+    /// let header = SecureTarHeader::new(vec![0; SECURETAR_V3_CIPHER_INIT_SIZE], Some(0), 3)?;
+    /// assert_eq!(header.size(), SECURETAR_V3_HEADER_SIZE);
+    /// # Ok::<(), securetar::SecureTarError>(())
+    /// ```
     pub fn size(&self) -> usize {
         SECURETAR_V3_HEADER_SIZE
     }
 }
 
+/// Password context for restoring per-file v3 key material.
 #[derive(Debug, Clone)]
 pub struct SecureTarRootKeyContext {
     password: String,
 }
 
 impl SecureTarRootKeyContext {
+    /// Creates a password context.
+    ///
+    /// ```
+    /// # use securetar::SecureTarRootKeyContext;
+    /// let context = SecureTarRootKeyContext::new("password");
+    /// ```
     pub fn new(password: impl Into<String>) -> Self {
         Self {
             password: password.into(),
         }
     }
 
+    /// Restores v3 key material from a parsed header.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarHeader, SecureTarRootKeyContext};
+    /// let mut file = File::open("encrypted.securetar")?;
+    /// let header = SecureTarHeader::from_reader(&mut file)?;
+    /// let key = SecureTarRootKeyContext::new("password").restore_key_material(&header)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn restore_key_material(
         &self,
         header: &SecureTarHeader,
@@ -251,6 +393,7 @@ impl SecureTarRootKeyContext {
     }
 }
 
+/// Restored v3 key material.
 #[derive(Debug, Clone)]
 pub struct SecureTarDerivedKeyMaterialV3 {
     key: [u8; V3_DERIVED_KEY_SIZE],
@@ -259,25 +402,71 @@ pub struct SecureTarDerivedKeyMaterialV3 {
 }
 
 impl SecureTarDerivedKeyMaterialV3 {
+    /// Returns the derived encryption key.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarHeader, SecureTarRootKeyContext};
+    /// let mut file = File::open("encrypted.securetar")?;
+    /// let header = SecureTarHeader::from_reader(&mut file)?;
+    /// let key = SecureTarRootKeyContext::new("password").restore_key_material(&header)?;
+    /// assert_eq!(key.key().len(), 32);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn key(&self) -> &[u8; V3_DERIVED_KEY_SIZE] {
         &self.key
     }
 
+    /// Returns header cipher initialization bytes.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarHeader, SecureTarRootKeyContext};
+    /// let mut file = File::open("encrypted.securetar")?;
+    /// let header = SecureTarHeader::from_reader(&mut file)?;
+    /// let key = SecureTarRootKeyContext::new("password").restore_key_material(&header)?;
+    /// assert!(!key.cipher_initialization().is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn cipher_initialization(&self) -> &[u8] {
         &self.cipher_initialization
     }
 }
 
+/// Decrypting SecureTar v3 stream.
 pub struct SecureTarDecryptStream<R> {
     header: SecureTarHeader,
     reader: DecryptReader<R>,
 }
 
 impl<R: Read> SecureTarDecryptStream<R> {
+    /// Opens a decrypting stream from encrypted input.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarDecryptStream, SecureTarRootKeyContext};
+    /// let file = File::open("encrypted.securetar")?;
+    /// let stream = SecureTarDecryptStream::new(file, SecureTarRootKeyContext::new("password"))?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn new(source: R, root_key_context: SecureTarRootKeyContext) -> Result<Self> {
         Self::with_ciphertext_size(source, root_key_context, None)
     }
 
+    /// Opens a stream with known total ciphertext size.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarDecryptStream, SecureTarRootKeyContext};
+    /// let file = File::open("encrypted.securetar")?;
+    /// let size = file.metadata()?.len();
+    /// let stream = SecureTarDecryptStream::with_ciphertext_size(
+    ///     file,
+    ///     SecureTarRootKeyContext::new("password"),
+    ///     Some(size),
+    /// )?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn with_ciphertext_size(
         mut source: R,
         root_key_context: SecureTarRootKeyContext,
@@ -287,6 +476,21 @@ impl<R: Read> SecureTarDecryptStream<R> {
         Self::from_header_and_source(source, header, root_key_context, ciphertext_size)
     }
 
+    /// Opens a stream after the caller consumed a prefix.
+    ///
+    /// ```rust,no_run
+    /// # use std::{fs::File, io::Read};
+    /// # use securetar::{SecureTarDecryptStream, SecureTarRootKeyContext, SECURETAR_MAGIC};
+    /// let mut file = File::open("encrypted.securetar")?;
+    /// let mut prefix = [0; SECURETAR_MAGIC.len()];
+    /// file.read_exact(&mut prefix)?;
+    /// let stream = SecureTarDecryptStream::with_prefix(
+    ///     &prefix,
+    ///     file,
+    ///     SecureTarRootKeyContext::new("password"),
+    /// )?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn with_prefix(
         prefix: &[u8],
         mut source: R,
@@ -330,14 +534,44 @@ impl<R: Read> SecureTarDecryptStream<R> {
         })
     }
 
+    /// Returns the parsed header.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarDecryptStream, SecureTarRootKeyContext};
+    /// let file = File::open("encrypted.securetar")?;
+    /// let stream = SecureTarDecryptStream::new(file, SecureTarRootKeyContext::new("password"))?;
+    /// assert_eq!(stream.header().version(), 3);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn header(&self) -> &SecureTarHeader {
         &self.header
     }
 
+    /// Returns the inner plaintext reader.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarDecryptStream, SecureTarRootKeyContext};
+    /// let file = File::open("encrypted.securetar")?;
+    /// let reader = SecureTarDecryptStream::new(file, SecureTarRootKeyContext::new("password"))?
+    ///     .into_reader();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn into_reader(self) -> DecryptReader<R> {
         self.reader
     }
 
+    /// Validates password or full stream integrity.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarDecryptStream, SecureTarRootKeyContext};
+    /// let file = File::open("encrypted.securetar")?;
+    /// let ok = SecureTarDecryptStream::new(file, SecureTarRootKeyContext::new("password"))?
+    ///     .validate(true);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn validate(mut self, basic_validation: bool) -> bool {
         validate_reader(&mut self.reader, basic_validation)
     }
@@ -349,6 +583,7 @@ impl<R: Read> Read for SecureTarDecryptStream<R> {
     }
 }
 
+/// Plaintext reader returned by [`SecureTarDecryptStream`].
 pub struct DecryptReader<R> {
     source: R,
     stream: secretstream::Stream<secretstream::Pull>,
@@ -360,6 +595,17 @@ pub struct DecryptReader<R> {
 }
 
 impl<R: Read> DecryptReader<R> {
+    /// Returns expected plaintext size.
+    ///
+    /// ```rust,no_run
+    /// # use std::fs::File;
+    /// # use securetar::{SecureTarDecryptStream, SecureTarRootKeyContext};
+    /// let file = File::open("encrypted.securetar")?;
+    /// let reader = SecureTarDecryptStream::new(file, SecureTarRootKeyContext::new("password"))?
+    ///     .into_reader();
+    /// let size = reader.plaintext_size();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn plaintext_size(&self) -> u64 {
         self.plaintext_size
     }
@@ -419,10 +665,28 @@ impl<R: Read> Read for DecryptReader<R> {
     }
 }
 
+/// Validates that a password can decrypt the beginning of the stream.
+///
+/// ```rust,no_run
+/// # use std::fs::File;
+/// # use securetar::validate_password;
+/// let file = File::open("encrypted.securetar")?;
+/// let ok = validate_password(file, "password");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn validate_password<R: Read>(source: R, password: impl Into<String>) -> bool {
     validate(source, password, true)
 }
 
+/// Validates a stream; pass `false` to read through the final tag.
+///
+/// ```rust,no_run
+/// # use std::fs::File;
+/// # use securetar::validate;
+/// let file = File::open("encrypted.securetar")?;
+/// let ok = validate(file, "password", false);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn validate<R: Read>(source: R, password: impl Into<String>, basic_validation: bool) -> bool {
     let context = SecureTarRootKeyContext::new(password);
     let Ok(stream) = SecureTarDecryptStream::new(source, context) else {
@@ -444,6 +708,13 @@ fn validate_reader(reader: &mut impl Read, basic_validation: bool) -> bool {
     }
 }
 
+/// Returns Python-compatible maximum outer archive ciphertext size.
+///
+/// ```
+/// # use securetar::get_archive_max_ciphertext_size;
+/// assert_eq!(get_archive_max_ciphertext_size(10240, 3, 1)?, 30720);
+/// # Ok::<(), securetar::SecureTarError>(())
+/// ```
 pub fn get_archive_max_ciphertext_size(
     plaintext_size: u64,
     version: u8,
@@ -463,14 +734,32 @@ pub fn get_archive_max_ciphertext_size(
     }
 }
 
+/// Returns v3 secretstream overhead for a plaintext size.
+///
+/// ```
+/// # use securetar::secretstream_overhead;
+/// assert_eq!(secretstream_overhead(0), 17);
+/// ```
 pub fn secretstream_overhead(plaintext_size: u64) -> u64 {
     plaintext_size.div_ceil(V3_SECRETSTREAM_CHUNK_SIZE).max(1) * V3_SECRETSTREAM_ABYTES as u64
 }
 
+/// Returns v3 payload ciphertext size, excluding the header.
+///
+/// ```
+/// # use securetar::v3_ciphertext_size;
+/// assert_eq!(v3_ciphertext_size(0), 17);
+/// ```
 pub fn v3_ciphertext_size(plaintext_size: u64) -> u64 {
     plaintext_size + secretstream_overhead(plaintext_size)
 }
 
+/// Checks whether bytes start with SecureTar magic.
+///
+/// ```
+/// # use securetar::{is_securetar_magic, SECURETAR_MAGIC};
+/// assert!(is_securetar_magic(SECURETAR_MAGIC));
+/// ```
 pub fn is_securetar_magic(prefix: &[u8]) -> bool {
     prefix.starts_with(SECURETAR_MAGIC)
 }

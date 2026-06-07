@@ -20,3 +20,7 @@ argon2 = "0.5.3"
 blake2b_simd = "1.0.3"
 sodiumoxide = "0.2.7"
 thiserror = "2.0.12"
+
+[dev-dependencies]
+tar = "0.4.44"
+tempfile = "3.14.0"
