@@ -1,0 +1,20 @@
+[package]
+name = "securetar"
+version = "0.1.0"
+edition = "2024"
+description = "Rust reader primitives for SecureTar v3 encrypted streams"
+license = "Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/home-assistant-libs/securetar"
+documentation = "https://docs.rs/securetar"
+keywords = ["securetar", "tar", "backup", "encryption", "home-assistant"]
+categories = ["cryptography", "encoding"]
+
+[lib]
+name = "securetar"
+
+[dependencies]
+argon2 = "0.5.3"
+blake2b_simd = "1.0.3"
+sodiumoxide = "0.2.7"
+thiserror = "2.0.12"

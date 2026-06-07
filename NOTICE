@@ -1,0 +1,9 @@
+securetar-rs is an independent Rust implementation of the SecureTar v3
+format used by the Python securetar package.
+
+The API shape, constants, test vectors, and compatibility behavior are aligned
+with the Python project:
+
+    https://github.com/home-assistant-libs/securetar
+
+The Python securetar package is licensed under the Apache License, Version 2.0.
