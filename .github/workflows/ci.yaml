@@ -42,3 +42,21 @@ jobs:
 
       - name: Build package
         run: cargo package --locked --verbose --all-features
+
+  msrv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ github.workflow }}-${{ github.job }}
+
+      - name: Check MSRV
+        run: cargo check --locked --all-targets --all-features

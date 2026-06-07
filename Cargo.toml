@@ -2,6 +2,7 @@
 name = "securetar"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Rust reader primitives for SecureTar v3 encrypted streams (used in Home Assistant backups)"
 license = "Apache-2.0"
 readme = "README.md"
