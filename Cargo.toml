@@ -10,7 +10,7 @@ repository = "https://github.com/orottier/securetar-rs"
 documentation = "https://docs.rs/securetar"
 keywords = ["securetar", "tar", "backup", "encryption", "home-assistant"]
 categories = ["cryptography", "encoding"]
-exclude = ["tests/fixtures/*"]
+exclude = ["tests/fixtures/*", "tests/python_compat.rs"]
 
 [lib]
 name = "securetar"
@@ -23,4 +23,3 @@ thiserror = "2.0.12"
 
 [dev-dependencies]
 tar = "0.4.44"
-tempfile = "3.14.0"
