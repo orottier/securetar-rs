@@ -1,5 +1,10 @@
 # Changelog
 
+## Version 0.1.1 (2026-06-08)
+
+- Fixed an issue of incomplete Read operations
+- Added logging
+
 ## Version 0.1.0 (2026-06-07)
 
 - Initial release of Rust reader primitives for SecureTar v3 encrypted streams.
