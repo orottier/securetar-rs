@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "securetar"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "blake2b_simd",
