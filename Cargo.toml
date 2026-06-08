@@ -19,6 +19,7 @@ name = "securetar"
 [dependencies]
 argon2 = "0.5.3"
 blake2b_simd = "1.0.3"
+log = "0.4.27"
 sodiumoxide = "0.2.7"
 thiserror = "2.0.12"
 

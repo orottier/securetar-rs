@@ -26,6 +26,7 @@
 use std::io::{Cursor, Read};
 
 use argon2::{Algorithm, Argon2, Params, Version};
+use log::{debug, error, trace};
 use sodiumoxide::crypto::secretstream::xchacha20poly1305 as secretstream;
 use thiserror::Error;
 
@@ -229,14 +230,17 @@ impl SecureTarHeader {
     ) -> Result<Self> {
         let magic = &file_id[..SECURETAR_MAGIC.len()];
         if magic != SECURETAR_MAGIC {
+            debug!("securetar header magic did not match; treating stream as legacy v1");
             return Err(SecureTarError::UnsupportedVersion(1));
         }
 
         let version = file_id[SECURETAR_MAGIC.len()];
         if version != V3_VERSION {
+            debug!("unsupported securetar version in header: {version}");
             return Err(SecureTarError::UnsupportedVersion(version));
         }
         if file_id[10..16] != SECURETAR_MAGIC_RESERVED {
+            debug!("securetar header reserved bytes were non-zero");
             return Err(SecureTarError::InvalidReservedBytes);
         }
 
@@ -250,6 +254,8 @@ impl SecureTarHeader {
 
         let mut cipher_initialization = vec![0; SECURETAR_V3_CIPHER_INIT_SIZE];
         reader.read_exact(&mut cipher_initialization)?;
+
+        debug!("parsed securetar header: version={version} plaintext_size={plaintext_size}");
 
         Ok(Self {
             cipher_initialization,
@@ -378,6 +384,7 @@ impl SecureTarRootKeyContext {
         let validation_key = blake2b_key(&root_key, &init.validation_salt);
 
         if !constant_time_eq(&validation_key, &init.validation_key) {
+            debug!("securetar validation key did not match");
             return Err(SecureTarError::InvalidPassword);
         }
 
@@ -515,6 +522,10 @@ impl<R: Read> SecureTarDecryptStream<R> {
             .map(|size| size.saturating_sub(header.size() as u64))
             .unwrap_or(computed_ciphertext_size);
 
+        debug!(
+            "opening securetar decrypt stream: plaintext_size={plaintext_size} computed_ciphertext_size={computed_ciphertext_size} outer_ciphertext_size={outer_ciphertext_size:?} ciphertext_size={ciphertext_size}"
+        );
+
         let key = secretstream::Key::from_slice(key_material.key())
             .ok_or(SecureTarError::InvalidHeader)?;
         let stream = secretstream::Stream::init_pull(&key_material.iv, &key)
@@ -616,34 +627,69 @@ impl<R: Read> DecryptReader<R> {
             let chunk_size =
                 (V3_SECRETSTREAM_CHUNK_SIZE + V3_SECRETSTREAM_ABYTES as u64).min(remaining);
 
+            trace!(
+                "reading securetar ciphertext chunk: requested_plaintext={size} ciphertext_pos={} ciphertext_size={} remaining={remaining} chunk_size={chunk_size}",
+                self.pos, self.ciphertext_size
+            );
+
             if chunk_size == 0 {
+                debug!(
+                    "securetar ciphertext ended before final tag: ciphertext_pos={} ciphertext_size={}",
+                    self.pos, self.ciphertext_size
+                );
                 return Err(SecureTarError::CiphertextTooShort);
             }
 
             let mut encrypted = vec![0; chunk_size as usize];
-            let read = self.source.read(&mut encrypted)?;
-            encrypted.truncate(read);
+            self.source.read_exact(&mut encrypted)?;
+            let read = encrypted.len();
             self.pos += read as u64;
 
+            trace!(
+                "read securetar ciphertext bytes: read={read} ciphertext_pos={}",
+                self.pos
+            );
+
             if encrypted.is_empty() {
+                debug!(
+                    "securetar source returned EOF before final tag: ciphertext_pos={} ciphertext_size={}",
+                    self.pos, self.ciphertext_size
+                );
                 return Err(SecureTarError::CiphertextTooShort);
             }
 
-            let (plaintext, tag) = self
-                .stream
-                .pull(&encrypted, None)
-                .map_err(|_| SecureTarError::SecretStreamFailure)?;
+            let (plaintext, tag) = self.stream.pull(&encrypted, None).map_err(|_| {
+                    error!(
+                        "securetar secretstream pull failed: encrypted_len={} ciphertext_pos={} ciphertext_size={}",
+                        encrypted.len(), self.pos, self.ciphertext_size
+                    );
+                SecureTarError::SecretStreamFailure
+            })?;
 
             let remaining = self.ciphertext_size.saturating_sub(self.pos);
             if tag == secretstream::Tag::Final && remaining != 0 {
+                debug!(
+                    "securetar final tag arrived before expected ciphertext end: ciphertext_pos={} ciphertext_size={} remaining={remaining}",
+                    self.pos, self.ciphertext_size
+                );
                 return Err(SecureTarError::UnexpectedFinalTag);
             }
             if remaining == 0 && tag != secretstream::Tag::Final {
+                debug!(
+                    "securetar ciphertext ended without final tag: ciphertext_pos={} ciphertext_size={}",
+                    self.pos, self.ciphertext_size
+                );
                 return Err(SecureTarError::MissingFinalTag);
             }
 
             self.done = tag == secretstream::Tag::Final;
             self.buffer = Cursor::new(plaintext);
+
+            trace!(
+                "decrypted securetar plaintext chunk: plaintext_len={} final_tag={} remaining={remaining}",
+                self.buffer.get_ref().len(),
+                self.done
+            );
 
             if self.buffer.get_ref().len() >= size || self.done {
                 break;
